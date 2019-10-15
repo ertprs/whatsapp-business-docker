@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: whatsapp-config-files
+type: Opaque
+stringData:
+  database.yml: |-
+    driver: pdo_mysql
+    host: mysql
+    user: root
+    password: xxxxxxxxxxxxxxxx
+    port: '3306'
+    dbname_prefix: ''
+    charset: utf8mb4
+    driverOptions:
+        2: 15
+
+  wa_config.json: |-
+    {
+      "use_tcp": true
+    }
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-volume-claim
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+
+
+--- 
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  annotations:
+    openshift.io/generated-by: OpenShiftWebConsole
+  labels:
+    app: whatsapp-web
+  name: whatsapp-web
+spec:
+  nodeSelector: null
+  output:
+    to:
+      kind: ImageStreamTag
+      name: whatsapp-web:latest
+  postCommit: {}
+  resources: {}
+  runPolicy: Serial
+  source:
+    git:
+      ref: master
+      uri: https://github.com/michael-wirth/whatsapp-web.git
+    type: Git
+  strategy:
+    sourceStrategy:
+      from:
+        kind: ImageStreamTag
+        name: php:7.1
+        namespace: openshift
+    type: Source
+  triggers:
+  - type: ImageChange
+  - type: ConfigChange
+  - generic:
+      secret: f36a0daf9300d670
+    type: Generic
+  - github:
+      secret: efbc97da817010f8
+    type: GitHub
+
+---
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  labels:
+    app: whatsapp-web
+  name: whatsapp-web
+spec:
+  replicas: 1
+  selector:
+    deploymentconfig: whatsapp-web
+  strategy:
+    activeDeadlineSeconds: 21600
+    resources: {}
+    rollingParams:
+      intervalSeconds: 1
+      maxSurge: 25%
+      maxUnavailable: 25%
+      timeoutSeconds: 600
+      updatePeriodSeconds: 1
+    type: Rolling
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: whatsapp-web
+        deploymentconfig: whatsapp-web
+    spec:
+      containers:
+      - env:
+        - name: WA_APP_MULTICONNECT
+          value: "1"
+        - name: WA_ENT_ENV
+          value: dev
+        image: whatsapp-web:latest
+        imagePullPolicy: Always
+        name: whatsapp-web
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        - containerPort: 8443
+          protocol: TCP
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/whatsapp
+          name: volume-xg0kt
+          readOnly: true
+        - mountPath: /usr/local/wamedia
+          name: volume-3kfcq
+        - mountPath: /usr/local/waent/data/web
+          name: volume-3kfcq
+          subPath: waent/data/web
+        - mountPath: /etc/wa_config.json
+          name: volume-k1auf
+          readOnly: true
+          subPath: wa_config.json
+      initContainers:
+      - name: prepare-persistend-volume-structure
+        image: busybox
+        command: ['sh', '-c', 'mkdir -p /usr/local/wamedia/outgoing; mkdir -p /usr/local/wamedia/shared;']   
+        volumeMounts:
+        - mountPath: /usr/local/wamedia
+          name: volume-3kfcq               
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: volume-xg0kt
+        secret:
+          defaultMode: 420
+          items:
+          - key: database.yml
+            path: database.yml
+          secretName: whatsapp-config-files
+      - name: volume-3kfcq
+        persistentVolumeClaim:
+          claimName: media-volume-claim
+      - name: volume-k1auf
+        secret:
+          defaultMode: 420
+          items:
+          - key: wa_config.json
+            path: wa_config.json
+          secretName: whatsapp-config-files
+  test: false
+  triggers:
+  - imageChangeParams:
+      automatic: true
+      containerNames:
+      - whatsapp-web
+      from:
+        kind: ImageStreamTag
+        name: whatsapp-web:latest
+        namespace: whatsapp
+    type: ImageChange
+  - type: ConfigChange
